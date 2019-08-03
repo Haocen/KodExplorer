@@ -19,6 +19,8 @@ RUN set -x \
   && docker-php-ext-install -j "$(getconf _NPROCESSORS_ONLN)" gd \
   && apk del --no-cache freetype-dev libpng-dev libjpeg-turbo-dev
 
+VOLUME /var/www/html
+
 WORKDIR /var/www/html
 
 COPY entrypoint.sh /usr/local/bin/
