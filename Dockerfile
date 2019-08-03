@@ -1,7 +1,7 @@
 FROM php:7.1-alpine
 
 
-ENV KODEXPLORER_VERSION=4.25
+ENV KODEXPLORER_VERSION=4.39
 ENV KODEXPLORER_URL="https://github.com/kalcaddle/KodExplorer/archive/"$KODEXPLORER_VERSION".tar.gz"
 
 RUN set -x \
