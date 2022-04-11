@@ -80,51 +80,50 @@ function path_filter($path){
 //filesize 解决大于2G 大小问题
 //http://stackoverflow.com/questions/5501451/php-x86-how-to-get-filesize-of-2-gb-file-without-external-program
 function get_filesize($path){
-	$result = false;
-	$fp = fopen($path,"r");
-	if(! $fp = fopen($path,"r")) return $result;
 	if(PHP_INT_SIZE >= 8 ){ //64bit
-		$result = (float)(abs(sprintf("%u",@filesize($path))));
+		return (float)(abs(sprintf("%u",@filesize($path))));
+	}
+	
+	$fp = fopen($path,"r");
+	if(!$fp) return $result;	
+	if (fseek($fp, 0, SEEK_END) === 0) {
+		$result = 0.0;
+		$step = 0x7FFFFFFF;
+		while ($step > 0) {
+			if (fseek($fp, - $step, SEEK_CUR) === 0) {
+				$result += floatval($step);
+			} else {
+				$step >>= 1;
+			}
+		}
 	}else{
-		if (fseek($fp, 0, SEEK_END) === 0) {
-			$result = 0.0;
-			$step = 0x7FFFFFFF;
-			while ($step > 0) {
-				if (fseek($fp, - $step, SEEK_CUR) === 0) {
-					$result += floatval($step);
-				} else {
-					$step >>= 1;
-				}
+		static $iswin;
+		if (!isset($iswin)) {
+			$iswin = (strtoupper(substr(PHP_OS, 0, 3)) == 'WIN');
+		}
+		static $exec_works;
+		if (!isset($exec_works)) {
+			$exec_works = (function_exists('exec') && !ini_get('safe_mode') && @exec('echo EXEC') == 'EXEC');
+		}
+		if ($iswin && class_exists("COM")) {
+			try {
+				$fsobj = new COM('Scripting.FileSystemObject');
+				$f = $fsobj->GetFile( realpath($path) );
+				$size = $f->Size;
+			} catch (Exception $e) {
+				$size = null;
+			}
+			if (is_numeric($size)) {
+				$result = $size;
+			}
+		}else if ($exec_works){
+			$cmd = ($iswin) ? "for %F in (\"$path\") do @echo %~zF" : "stat -c%s \"$path\"";
+			@exec($cmd, $output);
+			if (is_array($output) && is_numeric($size = trim(implode("\n", $output)))) {
+				$result = $size;
 			}
 		}else{
-			static $iswin;
-			if (!isset($iswin)) {
-				$iswin = (strtoupper(substr(PHP_OS, 0, 3)) == 'WIN');
-			}
-			static $exec_works;
-			if (!isset($exec_works)) {
-				$exec_works = (function_exists('exec') && !ini_get('safe_mode') && @exec('echo EXEC') == 'EXEC');
-			}
-			if ($iswin && class_exists("COM")) {
-				try {
-					$fsobj = new COM('Scripting.FileSystemObject');
-					$f = $fsobj->GetFile( realpath($path) );
-					$size = $f->Size;
-				} catch (Exception $e) {
-					$size = null;
-				}
-				if (is_numeric($size)) {
-					$result = $size;
-				}
-			}else if ($exec_works){
-				$cmd = ($iswin) ? "for %F in (\"$path\") do @echo %~zF" : "stat -c%s \"$path\"";
-				@exec($cmd, $output);
-				if (is_array($output) && is_numeric($size = trim(implode("\n", $output)))) {
-					$result = $size;
-				}
-			}else{
-				$result = filesize($path);
-			}
+			$result = filesize($path);
 		}
 	}
 	fclose($fp);
@@ -424,10 +423,12 @@ function path_haschildren($dir,$checkFile=false){
 		$fullpath = $dir.$file;
 		if ($checkFile) {//有子目录或者文件都说明有子内容
 			if(@is_file($fullpath) || is_dir($fullpath.'/')){
+				closedir($dh);
 				return true;
 			}
 		}else{//只检查有没有文件
 			if(@is_dir($fullpath.'/')){//解决部分主机报错问题
+				closedir($dh);
 				return true;
 			}
 		}
@@ -599,7 +600,7 @@ function move_path($source,$dest,$repeat_add='',$repeat_type='replace'){
 		$file_success += move_file($f,$path,$repeat_add,$repeat_type);
 	}
 	foreach($dirs as $f){
-		rmdir($f);
+		@rmdir($f);
 	}
 	@rmdir($source);
 	if($file_success == count($files)){
@@ -1034,21 +1035,16 @@ function file_put_out($file,$download=-1,$downFilename=false){
 	}
 	header('Etag: '.$etag);
 	header('Last-Modified: '.$time.' GMT');
-	header("X-OutFileName: ".$filenameOutput);
+	header("X-OutFileName: ".$filename);
 	header("X-Powered-By: kodExplorer.");
 	header("X-FileSize: ".$file_size);
 
-	//调用webserver下载
-	$server = strtolower($_SERVER['SERVER_SOFTWARE']);
-	if($server && $GLOBALS['config']['settings']['httpSendFile']){
-		if(strstr($server,'nginx')){//nginx
-			header("X-Sendfile: ".$file);
-		}else if(strstr($server,'apache')){ //apache
-			header('X-Accel-Redirect: '.$file);
-		}else if(strstr($server,'http')){//light http
-			header( "X-LIGHTTPD-send-file: " . $file);
-		}
-		return;
+	// 过滤svg中非法script内容; 避免xxs;
+	if(!$download && get_path_ext($filename) == 'svg'){
+		if($file_size > 1024*1024*5) {exit;}
+		$content = file_get_contents($file);
+		$content = removeXXS($content);
+		echo $content;exit;
 	}
 	
 	//远程路径不支持断点续传；打开zip内部文件
@@ -1057,6 +1053,20 @@ function file_put_out($file,$download=-1,$downFilename=false){
 		header('Content-Length: '.($end+1));
 		return;
 	}
+	
+	//调用webserver下载
+	$server = strtolower($_SERVER['SERVER_SOFTWARE']);
+	if($server && $GLOBALS['config']['settings']['httpSendFile']){
+		if(strstr($server,'nginx')){//nginx
+            header("X-Accel-Redirect: ".$file);
+        }else if(strstr($server,'apache')){ //apache
+            header('X-Sendfile: '.$file);
+        }else if(strstr($server,'http')){//light http
+            header( "X-LIGHTTPD-send-file: " . $file);
+        }
+		return;
+	}
+	
 	header("Accept-Ranges: bytes");
 	if (isset($_SERVER['HTTP_RANGE'])){
 		if (preg_match('/bytes=\h*(\d+)-(\d*)[\D.*]?/i', $_SERVER['HTTP_RANGE'], $matches)){
@@ -1086,6 +1096,54 @@ function file_put_out($file,$download=-1,$downFilename=false){
 		flush();
 	}
 	fclose($fp);
+}
+function removeXXS($val){
+	$val = preg_replace('/([\x00-\x08\x0b-\x0c\x0e-\x19])/', '', $val);
+	$search = 'abcdefghijklmnopqrstuvwxyz';
+	$search .= 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+	$search .= '1234567890!@#$%^&*()';
+	$search .= '~`";:?+/={}[]-_|\'\\';
+	for ($i = 0; $i < strlen($search); $i++) {
+		// ;? matches the ;, which is optional 
+		// 0{0,7} matches any padded zeros, which are optional and go up to 8 chars 
+		// @ @ search for the hex values 
+		$val = preg_replace('/(&#[xX]0{0,8}' . dechex(ord($search[$i])) . ';?)/i', $search[$i], $val); // with a ; 
+		// @ @ 0{0,7} matches '0' zero to seven times  
+		$val = preg_replace('/(&#0{0,8}' . ord($search[$i]) . ';?)/', $search[$i], $val); // with a ; 
+	}
+
+	// now the only remaining whitespace attacks are \t, \n, and \r 
+	$ra1 = array('javascript', 'vbscript', 'expression', 'applet', 'meta', 'xml', 'blink', 'link', 'style', 'script', 'embed', 'object', 'iframe', 'frame', 'frameset', 'ilayer', 'layer', 'bgsound', 'title', 'base');
+	
+	$ra1 =  array('javascript', 'vbscript', 'expression','script');// 过多,误判
+	$ra2 = array('onabort', 'onactivate', 'onafterprint', 'onafterupdate', 'onbeforeactivate', 'onbeforecopy', 'onbeforecut', 'onbeforedeactivate', 'onbeforeeditfocus', 'onbeforepaste', 'onbeforeprint', 'onbeforeunload', 'onbeforeupdate', 'onblur', 'onbounce', 'oncellchange', 'onchange', 'onclick', 'oncontextmenu', 'oncontrolselect', 'oncopy', 'oncut', 'ondataavailable', 'ondatasetchanged', 'ondatasetcomplete', 'ondblclick', 'ondeactivate', 'ondrag', 'ondragend', 'ondragenter', 'ondragleave', 'ondragover', 'ondragstart', 'ondrop', 'onerror', 'onerrorupdate', 'onfilterchange', 'onfinish', 'onfocus', 'onfocusin', 'onfocusout', 'onhelp', 'onkeydown', 'onkeypress', 'onkeyup', 'onlayoutcomplete', 'onload', 'onlosecapture', 'onmousedown', 'onmouseenter', 'onmouseleave', 'onmousemove', 'onmouseout', 'onmouseover', 'onmouseup', 'onmousewheel', 'onmove', 'onmoveend', 'onmovestart', 'onpaste', 'onpropertychange', 'onreadystatechange', 'onreset', 'onresize', 'onresizeend', 'onresizestart', 'onrowenter', 'onrowexit', 'onrowsdelete', 'onrowsinserted', 'onscroll', 'onselect', 'onselectionchange', 'onselectstart', 'onstart', 'onstop', 'onsubmit', 'onunload');
+	$ra = array_merge($ra1, $ra2);
+
+	$found = true; // keep replacing as long as the previous round replaced something 
+	while ($found == true) {
+		$val_before = $val;
+		for ($i = 0; $i < sizeof($ra); $i++) {
+			$pattern = '/';
+			for ($j = 0; $j < strlen($ra[$i]); $j++) {
+				if ($j > 0) {
+					$pattern .= '(';
+					$pattern .= '(&#[xX]0{0,8}([9ab]);)';
+					$pattern .= '|';
+					$pattern .= '|(&#0{0,8}([9|10|13]);)';
+					$pattern .= ')*';
+				}
+				$pattern .= $ra[$i][$j];
+			}
+			$pattern .= '/i';
+			$replacement = substr($ra[$i], 0, 2) . '_' . substr($ra[$i], 2); // add in <> to nerf the tag  
+			$val = preg_replace($pattern, $replacement, $val); // filter out the hex tags  
+			if ($val_before == $val) {
+				// no replacements were made, so exit the loop  
+				$found = false;
+			}
+		}
+	}
+	return $val;
 }
 
 /**
@@ -1211,8 +1269,10 @@ function kod_move_uploaded_file($fromPath,$savePath){
 			show_json('move uploaded file error!',false);
 		}
 	}
-
-	$result = rename($tempPath,$savePath);
+	if(!$result = rename($tempPath,$savePath)){
+		del_file($savePath);
+		$result = rename($tempPath,$savePath);
+	}
 	chmod_path($savePath,DEFAULT_PERRMISSIONS);
 	return $result;
 }

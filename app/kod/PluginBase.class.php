@@ -50,7 +50,7 @@ class PluginBase{
 		if(!is_array($systemConfig['pluginList'])){
 			$systemConfig['pluginList'] = array();
 		}
-		if(is_array($systemConfig['pluginList'][$name])){
+		if(is_array($systemConfig['pluginList'][$id])){ 
 			$systemConfig['pluginList'][$id]['regiest'] = $array;
 		}else{
 			$systemConfig['pluginList'][$id] = array(
@@ -79,7 +79,7 @@ class PluginBase{
 				show_json(LNG('url error!'),false);
 			}
 			$cacheName = md5($path.'kodcloud').'.'.get_path_ext($path);
-			$cacheFile = TEMP_PATH.$this->pluginName.'/files/'.$cacheName;
+			$cacheFile = $this->filePathName($cacheName);
 			mk_dir(get_path_father($cacheFile));
 			if(!file_exists($cacheFile)){
 				$result = url_request($path,'DOWNLOAD',$cacheFile);
@@ -92,8 +92,8 @@ class PluginBase{
 				version_compare(phpversion(), '7.1.0', '>=') &&
 				preg_match("/([\x81-\xfe][\x40-\xfe])/", $path, $match)){
 
-				$name = hash_path($path).'.'.get_path_ext($path);
-				$cacheFile = TEMP_PATH.$this->pluginName.'/files/'.$name;
+				$cacheName = hash_path($path).'.'.get_path_ext($path);
+				$cacheFile = $this->filePathName($cacheName);
 				mk_dir(get_path_father($cacheFile));
 				if(!file_exists($cacheFile)){
 					@copy($path,$cacheFile);
@@ -105,6 +105,10 @@ class PluginBase{
 			show_tips(LNG('file').' '.LNG('not_exists'));
 		}
 		return $path;
+	}
+	private function filePathName($fileName){
+		if(! checkExtSafe($fileName)){$fileName = $fileName.'.txt';}
+		return TEMP_PATH.$this->pluginName.'/files/'.$fileName;
 	}
 
 	/**
@@ -257,10 +261,11 @@ class PluginBase{
 		$lang = I18n::getType();
 		$array = array();
 		if(file_exists($path.$lang.'.php')){
-			$array = include_once($path.$lang.'.php');
+			$array = include($path.$lang.'.php');
 		}else if(file_exists($path.$default.'.php')){
-			$array = include_once($path.$default.'.php');
+			$array = include($path.$default.'.php');
 		}
+		if(!is_array($array)) return array();
 		if(count($array) > 0){
 			I18n::set($array);
 		}
